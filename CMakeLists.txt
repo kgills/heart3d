@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 2.8)
+project( heart )
+find_package( OpenCV REQUIRED )
+include_directories( ${OpenCV_INCLUDE_DIRS} )
+add_executable( heart heart.cpp )
+target_link_libraries( heart ${OpenCV_LIBS} )
