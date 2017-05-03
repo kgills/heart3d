@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 project( heart )
 find_package( OpenCV REQUIRED )
-include_directories( ${OpenCV_INCLUDE_DIRS} )
+include_directories( ${OpenCV_INCLUDE_DIRS} /usr/local/include/itpp)
 add_executable( heart heart.cpp )
-target_link_libraries( heart ${OpenCV_LIBS} )
+target_link_libraries( heart ${OpenCV_LIBS} /usr/local/lib/libitpp.8.2.1.dylib)
