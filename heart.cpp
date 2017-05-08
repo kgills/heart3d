@@ -1,25 +1,25 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <stdio.h>
 #include "opencv2/core/core.hpp"
 #include "opencv2/contrib/contrib.hpp"
 #include "opencv2/highgui/highgui.hpp"
-#include <itpp/itsignal.h>
-#include <itpp/base/mat.h>
 
 using namespace cv;
 using namespace std;
 
 CascadeClassifier face_cascade;
+
 String face_cascade_name = "haarcascade_frontalface_alt.xml";
 
-double fps = 15.0;
 float xy_drift = 150;           // Assuming drift will not be more than this value in either direction
 
-void heart_rate(VideoCapture capture) 
+void heart_rate(VideoCapture capture, const char *filename) 
 {
     Mat frame;
     vector<Rect> faces;
+    Rect prev_face;
     Mat frame_gray;
     Mat face_circle;
     Rect myROI;
@@ -47,12 +47,16 @@ void heart_rate(VideoCapture capture)
     double b_sd = 0;
     double b_var = 0;
 
-    while(1) {
+    FILE * pFile;
+    pFile = fopen(filename,"w");
+
+    while(framecount < 250) {
 
         // Attempt to read the next frame
         if(!capture.read(frame)) {
             break;
         }
+
         framecount++;
 
         // Create the gray frames
@@ -65,21 +69,7 @@ void heart_rate(VideoCapture capture)
 
         if(faces.size() == 0) {
             cout << "No faces" << endl;
-
-            // Relax the size restrictions
-            float factor = 0.2;
-            float low_val;
-            while(1) {
-                low_val = (prev_dim*(1-factor));
-                if(low_val < 0.0) {
-                    low_val = 0.0;
-                }
-                face_cascade.detectMultiScale(frame_gray, faces, 1.1, 2, 0|CV_HAAR_SCALE_IMAGE, 
-                    Size(low_val, low_val) , Size(prev_dim*(1.0+factor), prev_dim*(1+factor)));
-                if(faces.size() > 1) {
-                    break;
-                }
-            }
+            faces[0] = prev_face;
         }
 
         if(faces.size() > 1) {
@@ -97,27 +87,32 @@ void heart_rate(VideoCapture capture)
                     faces[i].y < (prev_y+xy_drift) && (faces[i].y > (prev_y-xy_drift))) {
                     faces[0] = faces[i];
 
+                    printf("Found the good face %d\n", i);
                     found = 1;
                     break;
                 }
             }
 
             if(!found) {
+                cout << "Can't find the face" << endl;
                 continue;
             }
         }
 
+        // Save the information for the next iteration
+        prev_face=faces[0];
         prev_x = faces[0].x;
         prev_y = faces[0].y;
         prev_dim = faces[0].width;
 
         // Extract the face
-        Rect myROI(faces[0].x+faces[0].width*0.09, faces[0].y, faces[0].width*0.80 , faces[0].height);
-
+        Rect myROI(faces[0].x+faces[0].width*0.25, faces[0].y, faces[0].width*0.45 , faces[0].height*0.3);
         cropped = frame(myROI);
 
         // seperate into bgr channels
-        split(cropped,bgr);//split source 
+        split(cropped,bgr);
+
+        // Calculate the average pixel value in each channel
         Scalar b_avg, g_avg, r_avg;
         b_avg = mean(bgr[0]);
         g_avg = mean(bgr[1]);
@@ -131,25 +126,24 @@ void heart_rate(VideoCapture capture)
         g_mean += g_avg[0];
         r_mean += r_avg[0];
 
+        // Save the frame time
         current_time = capture.get(CV_CAP_PROP_POS_MSEC);
         if(current_time - prev_time > 0) {
             dt_avg += current_time - prev_time;
             dt_avg_count++;
         }
 
-        printf("%f, %f, %f\n", b_avg[0], g_avg[0], r_avg[0]);
+        // printf("%f, %f, %f\n", b_avg[0], g_avg[0], r_avg[0]);
 
         prev_time = current_time;
 
         // Display one of the channels
-        imshow("video",bgr[2]);
+        imshow("video",bgr[1]);
         cvWaitKey(10);
     }
 
-    itpp::mat ica_mat(3, framecount);
-
     dt_avg /= dt_avg_count;
-    printf("dt_avg = %f framecount = %d\n", dt_avg, framecount);
+    // printf("dt_avg = %f framecount = %d\n", dt_avg, framecount);
 
     // calculate the mean
     b_mean = b_mean/framecount;
@@ -173,52 +167,27 @@ void heart_rate(VideoCapture capture)
     printf("b_var=%f g_var=%f r_var=%f\n", b_var, g_var, r_var);
     printf("b_sd=%f g_sd=%f r_sd=%f\n", b_sd, g_sd, r_sd);
 
-    printf("b,g,r,t\n");
+    fprintf(pFile, "b,g,r,t\n");
 
     for(int i = 0; i < framecount; i++) {
+
         // Normalize the samples
         b_samples[i] = (b_samples[i] - b_mean)/b_sd;
         g_samples[i] = (g_samples[i] - g_mean)/g_sd;
         r_samples[i] = (r_samples[i] - r_mean)/r_sd;
 
-        printf("%f, %f, %f, %f\n", b_samples[i], g_samples[i], r_samples[i], i*dt_avg);
-        
-        // Add samples to mat
-        ica_mat.set(0, i, b_samples[i]);
-        ica_mat.set(1, i, g_samples[i]);
-        ica_mat.set(2, i, r_samples[i]);
+        fprintf(pFile, "%f, %f, %f, %f\n", b_samples[i], g_samples[i], r_samples[i], i*dt_avg);
+
     }
 
-    // Perform the ICA
-    itpp::Fast_ICA ica(ica_mat);
-    bool result = ica.separate();
-
-    if(result) {
-        cout << "ICA Worked!" << endl;
-    } else {
-        cout << "You are not prepared.." << endl;
-        return;
-    }
-
-    itpp::mat ind_samples = ica.get_independent_components();
-
-#if 0
-    printf("b, g, r, t\n");
-    for(int i = 0; i < ind_samples.cols(); i++) {
-        for(int j = 0; j < ind_samples.rows(); j++) {
-            printf("%f, ", ind_samples.get(i,j));
-        }
-        printf("%f\n", i*dt_avg);
-    }
-#endif
-
+    fclose(pFile);
 }
 
 int main(int argc, const char *argv[]) 
 {
    
-    if (argc != 2) {
-        cout << "usage: " << argv[0] << " <video.avi>"<< endl;
+    if (argc != 3) {
+        cout << "usage: " << argv[0] << " <video.avi> <output_file.csv"<< endl;
         return 0;
     }
 
@@ -237,7 +206,10 @@ int main(int argc, const char *argv[])
         return -1;
     }
 
-    heart_rate(capture);
+    double fps = capture.get(CV_CAP_PROP_FPS);
+    printf("fps = %f\n", fps);
+
+    heart_rate(capture, argv[2]);
 
     cout << "Exiting" << endl;
     return 0;
